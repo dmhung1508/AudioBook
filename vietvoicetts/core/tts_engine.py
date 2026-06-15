@@ -45,6 +45,7 @@ class TTSEngine:
         """Prepare all inputs for inference, handling text chunking if needed"""
         audio = self.audio_processor.load_audio(reference_audio_path_or_bytes, self.config.sample_rate)
         audio = audio.reshape(1, 1, -1)
+        list_text = []
 
         # Clean text
         reference_text = self.text_processor.clean_text(reference_text)
@@ -126,9 +127,10 @@ class TTSEngine:
             
             # Calculate and display total duration for this chunk
             chunk_total_duration = ref_audio_duration + chunk_target_duration
+            list_text.append(chunk)
             print(f"Chunk {i+1}/{len(chunks)}: {len(chunk)} chars, total duration {chunk_total_duration:.1f}s (ref: {ref_audio_duration:.1f}s + target: {chunk_target_duration:.1f}s). Content: {chunk}")
         
-        return inputs_list
+        return inputs_list, list_text
     
     def _run_preprocess(self, audio: np.ndarray, text_ids: np.ndarray, 
                        max_duration: np.ndarray) -> Tuple[np.ndarray, ...]:
@@ -211,9 +213,11 @@ class TTSEngine:
         ref_audio, ref_text = self.model_session_manager.select_sample(gender, group, area, emotion, reference_audio, reference_text)
         
         try:
-            inputs_list = self._prepare_inputs(ref_audio, ref_text, text)
+            inputs_list, list_text = self._prepare_inputs(ref_audio, ref_text, text)
             
             generated_waves = []
+            chunk_durations = []  # Track duration of each chunk
+            
             for i, (audio, text_ids, max_duration, time_step) in enumerate(inputs_list):
                 print(f"Generating speech for chunk {i+1}/{len(inputs_list)}...")
                 
@@ -227,22 +231,61 @@ class TTSEngine:
                 )
                 
                 generated_signal = self._run_decode(noise, ref_signal_len)
+                
+                # Calculate actual audio duration for this chunk
+                chunk_audio_duration = generated_signal.shape[-1] / self.config.sample_rate
+                chunk_durations.append(chunk_audio_duration)
+                
+                # Print chunk information with actual audio duration
+                chunk_text = list_text[i] if i < len(list_text) else "N/A"
+                print(f"✅ Chunk {i+1}: Audio duration = {chunk_audio_duration:.2f}s, Text length = {len(chunk_text)} chars")
+                print(f"   📝 Content: {chunk_text[:100]}{'...' if len(chunk_text) > 100 else ''}")
+                
                 generated_waves.append(generated_signal)
+            
+            # Print summary of all chunks
+            total_chunks_duration = sum(chunk_durations)
+            print(f"\n📊 Chunk Summary:")
+            print(f"   Total chunks: {len(chunk_durations)}")
+            print(f"   Individual durations: {[f'{d:.2f}s' for d in chunk_durations]}")
+            print(f"   Total chunks duration: {total_chunks_duration:.2f}s")
             
             # Concatenate all generated waves with cross-fading
             if len(generated_waves) > 1:
-                print(f"Concatenating {len(generated_waves)} chunks with improved cross-fade (duration: {self.config.cross_fade_duration}s)...")
+                print(f"\n🔄 Concatenating {len(generated_waves)} chunks with improved cross-fade (duration: {self.config.cross_fade_duration}s)...")
             
             final_wave = self.audio_processor.concatenate_with_crossfade_improved(
                 generated_waves, self.config.cross_fade_duration, self.config.sample_rate
             )
             
+            # Calculate final audio duration
+            final_audio_duration = final_wave.shape[-1] / self.config.sample_rate
+            
             generation_time = time.time() - start_time
+            
+            # Print final summary
+            print(f"\n🎯 Final Audio Summary:")
+            print(f"   Final audio duration: {final_audio_duration:.2f}s")
+            print(f"   Total generation time: {generation_time:.2f}s")
+            if len(chunk_durations) > 1:
+                cross_fade_reduction = total_chunks_duration - final_audio_duration
+                print(f"   Cross-fade time reduction: {cross_fade_reduction:.2f}s")
             
             if output_path:
                 self.audio_processor.save_audio(final_wave, output_path, self.config.sample_rate)
-                print(f"Audio saved to: {output_path}")
-            
+                print(f"   💾 Audio saved to: {output_path}")
+                # lưu transcript
+                transcript_path = output_path.replace('.wav', '.txt')
+                with open(transcript_path, 'w', encoding='utf-8') as f:
+                    for i, (chunk_text, chunk_duration) in enumerate(zip(list_text, chunk_durations)):
+                        if i == 0:
+                            timestamp = "[00:00]"
+                        else:
+                            minutes = int(sum(chunk_durations[:i]) // 60)
+                            seconds = int(sum(chunk_durations[:i]) % 60)
+                            timestamp = f"[{minutes:02d}:{seconds:02d}]"
+                        f.write(f"{timestamp} {chunk_text}\n")
+                print(f"   📄 Transcript saved to: ", transcript_path)
             return final_wave, generation_time
             
         except Exception as e:

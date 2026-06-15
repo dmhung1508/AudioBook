@@ -1,0 +1,1 @@
+Xin chào các bạn, hôm nay mình sẽ hướng dẫn các bạn cách sử dụng VietVoice TTS. Trước tiên, bạn cần cài đặt Python trên máy tính của mình. Sau đó, hãy mở VSCode và tạo một file mới với phần mở rộng .py. Tiếp theo, chúng ta sẽ import thư viện VietVoice TTS vào project. Cuối cùng, bạn có thể bắt đầu tạo ra những file âm thanh tuyệt vời.
